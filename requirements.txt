@@ -1,0 +1,5 @@
+MetaTrader5
+telethon
+python-dotenv
+python-telegram-bot
+tzdata

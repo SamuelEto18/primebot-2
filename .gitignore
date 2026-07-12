@@ -1,0 +1,36 @@
+# Secrets
+.env*
+!.env.example
+
+# Telegram
+*.session
+*.session-journal
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Runtime
+data/
+logs/
+*.log
+
+# Generated files and backups
+*.zip
+*.backup
+*_backup/
+*Backup*/
+primebot2_review_stage/
+demo-live-review-*.txt
+PrimeBot2-*-Tests-*.txt
+
+# IDE and Windows
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini

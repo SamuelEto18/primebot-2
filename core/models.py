@@ -36,7 +36,7 @@ class Signal:
 
     message_id: int = 0
     chat_id: int = 0
-    
+
     edited: bool = False
 
     positions: List[Position] = field(default_factory=list)

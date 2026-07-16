@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "expectedOriginUrl": "https://github.com/SamuelEto18/primebot-2.git",
+  "minimumTestCount": 221,
+  "managedRootFiles": [
+    "config.py",
+    "control_bot.py",
+    "main.py",
+    "requirements.txt"
+  ],
+  "managedRoots": [
+    "core",
+    "tests"
+  ],
+  "requiredManagedFiles": [
+    "config.py",
+    "control_bot.py",
+    "core/break_even.py",
+    "core/break_even_storage.py",
+    "main.py",
+    "requirements.txt"
+  ],
+  "alwaysProtectedRoots": [
+    ".git",
+    ".venv",
+    ".mt5",
+    "archives",
+    "backups",
+    "credentials",
+    "data",
+    "deployment-archives",
+    "logs",
+    "mt5-credentials",
+    "secrets"
+  ],
+  "alwaysProtectedNames": [
+    ".env"
+  ],
+  "alwaysProtectedGlobs": [
+    ".env.*",
+    "*.7z",
+    "*.backup",
+    "*.credentials",
+    "*.gz",
+    "*.key",
+    "*.session",
+    "*.session-journal",
+    "*.tar",
+    "*.zip",
+    "*credential*",
+    "*secret*"
+  ],
+  "sourceIdentityChecks": [
+    {
+      "name": "Telegram chat ID",
+      "path": "config.py",
+      "pattern": "(?m)^PRIMEBOT2_TELEGRAM_CHANNEL_ID\\s*=\\s*-1002275473775\\s*$"
+    },
+    {
+      "name": "MT5 magic",
+      "path": "config.py",
+      "pattern": "(?m)^MAGIC_NUMBER\\s*=\\s*987655\\s*$"
+    },
+    {
+      "name": "MT5 comment",
+      "path": "config.py",
+      "pattern": "(?m)^COMMENT\\s*=\\s*[\"']PrimeBot2[\"']\\s*$"
+    },
+    {
+      "name": "Broker symbol",
+      "path": "config.py",
+      "pattern": "(?m)^PROFITABLE_BREAK_EVEN_SYMBOL\\s*=\\s*[\"']XAUUSD\\.s[\"']\\s*$"
+    }
+  ],
+  "productionMt5Identity": {
+    "implementation": "core/mt5_status.py:get_server",
+    "field": "MetaTrader5.account_info().server",
+    "expected": "PUPrime-Live 6"
+  }
+}

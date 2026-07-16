@@ -41,13 +41,13 @@ class PositionManagerSafetyTests(unittest.TestCase):
                 ticket=100,
                 error="down"
             )
-        ), patch.object(position_manager, "modify_trade") as modify_trade, \
+        ), patch.object(position_manager, "apply_profitable_break_even") as apply_be, \
             patch.object(position_manager, "update_trade") as update_trade:
             position_manager.process_trades_once([trade])
 
         self.assertFalse(trade["positions"][0]["closed"])
         self.assertFalse(trade["positions"][1]["break_even"])
-        modify_trade.assert_not_called()
+        apply_be.assert_not_called()
         update_trade.assert_not_called()
 
 
@@ -71,13 +71,13 @@ class PositionManagerSafetyTests(unittest.TestCase):
                     "deal": None,
                     "metadata": {},
                 }
-            ), patch.object(position_manager, "modify_trade") as modify_trade, \
+            ), patch.object(position_manager, "apply_profitable_break_even") as apply_be, \
             patch.object(position_manager, "update_trade") as update_trade:
             position_manager.process_trades_once([trade])
 
         self.assertFalse(trade["positions"][0]["closed"])
         self.assertFalse(trade["positions"][1]["break_even"])
-        modify_trade.assert_not_called()
+        apply_be.assert_not_called()
         update_trade.assert_not_called()
 
     def test_break_even_triggered_after_confirmed_tp1_take_profit(self):
@@ -92,7 +92,17 @@ class PositionManagerSafetyTests(unittest.TestCase):
             return mt5_service.PositionQueryResult(
                 status=mt5_service.POSITION_OPEN,
                 ticket=ticket,
-                position=SimpleNamespace(price_open=101.5)
+                position=SimpleNamespace(
+                    ticket=101,
+                    identifier=501,
+                    symbol="XAUUSD.s",
+                    magic=987655,
+                    comment="PrimeBot2",
+                    type=0,
+                    price_open=101.5,
+                    sl=99,
+                    tp=120,
+                )
             )
 
         with patch.object(position_manager, "query_position", side_effect=query), \
@@ -114,16 +124,24 @@ class PositionManagerSafetyTests(unittest.TestCase):
                 }
             ), patch.object(
                 position_manager,
-                "modify_trade",
-                return_value={"success": True}
-            ) as modify_trade, patch.object(position_manager, "notify_break_even"), \
+                "apply_profitable_break_even",
+                return_value={
+                    "status": position_manager.STATUS_MOVED,
+                    "ticket": 101,
+                    "target_sl": 102.5,
+                },
+            ) as apply_be, patch.object(position_manager, "has_pending_break_even", return_value=False), \
+            patch.object(position_manager, "record_automatic_pending"), \
+            patch.object(position_manager, "notify_break_even"), \
             patch.object(position_manager, "notify_position_closed"), \
             patch.object(position_manager, "update_trade") as update_trade:
             position_manager.process_trades_once([trade])
 
         self.assertTrue(trade["positions"][0]["closed"])
         self.assertTrue(trade["positions"][1]["break_even"])
-        modify_trade.assert_called_once_with(101, sl=101.5)
+        apply_be.assert_called_once()
+        self.assertEqual(apply_be.call_args.kwargs, {"dry_run": False})
+        self.assertEqual(trade["positions"][1]["sl"], 102.5)
         update_trade.assert_called_once_with(trade)
 
     def test_repeated_pending_close_history_warning_is_rate_limited(self):

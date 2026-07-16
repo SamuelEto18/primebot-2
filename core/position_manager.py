@@ -3,13 +3,23 @@ import time
 
 from config import MOVE_TO_BREAK_EVEN
 
+from core.break_even import (
+    STATUS_ALREADY_PROTECTED,
+    STATUS_MOVED,
+    STATUS_PENDING,
+    apply_profitable_break_even,
+    has_pending_break_even,
+    record_automatic_pending,
+    retry_pending_break_even_actions,
+)
+
 from core.lifecycle import wait_for_shutdown
 from core.mt5_service import (
     POSITION_ABSENT,
     POSITION_OPEN,
     confirm_position_closed,
     confirm_position_closed_by_tp,
-    modify_trade,
+    modify_trade,  # Compatibility export; BE execution uses the shared helper.
     query_position,
     recover_pending_position_identity,
 )
@@ -552,23 +562,32 @@ def _move_remaining_to_break_even(trade):
             )
             continue
 
-        entry = _position_entry(
+        if has_pending_break_even(position_result.position):
+            continue
+
+        result = apply_profitable_break_even(
             position_result.position,
-            position
+            dry_run=False,
         )
 
-        result = modify_trade(
-            ticket,
-            sl=entry
+        source_key = (
+            f"{trade.get('chat_id')}:{trade.get('message_id')}:"
+            f"{ticket}"
         )
+        record_automatic_pending(position_result.position, result, source_key)
 
-        if result["success"]:
+        if result.get("status") in (STATUS_MOVED, STATUS_ALREADY_PROTECTED):
 
             position["break_even"] = True
+            position["sl"] = result.get("target_sl", position.get("sl"))
             changed = True
 
-            notify_break_even(
-                ticket
+            if result.get("status") == STATUS_MOVED:
+                notify_break_even(ticket)
+        elif result.get("status") == STATUS_PENDING:
+            logger.warning(
+                "Automatic TP1 profitable break-even is pending | "
+                f"Ticket={ticket} Reason={result.get('reason')}"
             )
 
     return changed
@@ -617,6 +636,7 @@ def run_startup_recovery():
 
     try:
         recover_pending_identities_once()
+        retry_pending_break_even_actions()
         process_trades_once(load_trades())
     except Exception as exc:
         logger.warning(f"Startup recovery skipped: {exc}")
@@ -637,6 +657,7 @@ def monitor_positions():
                 mark_position_manager_heartbeat()
 
                 recover_pending_identities_once()
+                retry_pending_break_even_actions()
                 trades = load_trades()
 
                 process_trades_once(trades)

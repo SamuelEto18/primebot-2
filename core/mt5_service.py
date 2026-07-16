@@ -325,6 +325,12 @@ def position_type_buy():
     return mt5.POSITION_TYPE_BUY
 
 
+def position_type_sell():
+
+    _require_mt5()
+    return mt5.POSITION_TYPE_SELL
+
+
 def order_type_buy():
 
     _require_mt5()
@@ -365,6 +371,12 @@ def trade_retcode_done():
 
     _require_mt5()
     return mt5.TRADE_RETCODE_DONE
+
+
+def trade_retcode_invalid_stops():
+
+    _require_mt5()
+    return getattr(mt5, "TRADE_RETCODE_INVALID_STOPS", None)
 
 
 def deal_entry_out():
@@ -1758,7 +1770,14 @@ def recover_pending_position_identity(
         )
 
 
-def modify_trade(ticket, sl=None, tp=None):
+def modify_trade(
+    ticket,
+    sl=None,
+    tp=None,
+    expected_symbol=None,
+    expected_magic=None,
+    expected_comment=None,
+):
 
     with MT5_LOCK:
         _require_mt5()
@@ -1772,6 +1791,26 @@ def modify_trade(ticket, sl=None, tp=None):
             }
 
         position = positions[0]
+
+        ownership_checks = (
+            ("symbol", expected_symbol),
+            ("magic", expected_magic),
+            ("comment", expected_comment),
+        )
+
+        for field, expected in ownership_checks:
+            if expected is not None and getattr(position, field, None) != expected:
+                logger.warning(
+                    "MT5 modify blocked by ownership check | "
+                    f"Ticket={ticket} Field={field}"
+                )
+                return {
+                    "success": False,
+                    "ticket": ticket,
+                    "comment": f"Ownership mismatch: {field}",
+                    "ownership_mismatch": True,
+                }
+
         symbol = position.symbol
         requested_sl = sl if sl is not None else position.sl
         requested_tp = tp if tp is not None else position.tp

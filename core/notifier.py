@@ -132,6 +132,39 @@ def notify_break_even(ticket):
     )
 
 
+def notify_break_even_summary(summary):
+    no_positions = (
+        "Unknown (paused)"
+        if summary.get("paused")
+        else ("Yes" if summary.get("no_primebot2_positions") else "No")
+    )
+    send(
+        "SET BREAKEVEN - APPROVED STICKER\n\n"
+        f"Mode: {str(summary.get('mode', 'unknown')).upper()}\n"
+        f"Positions discovered: {summary.get('positions_discovered', 0)}\n"
+        f"PrimeBot 2 positions: {summary.get('primebot2_positions', 0)}\n"
+        f"Moved successfully: {summary.get('moved', 0)}\n"
+        f"Already protected: {summary.get('already_protected', 0)}\n"
+        f"Pending broker-validity retry: {summary.get('pending', 0)}\n"
+        f"Simulated: {summary.get('simulated', 0)}\n"
+        f"Failed: {summary.get('failed', 0)}\n"
+        f"Foreign/manual positions ignored: {summary.get('ignored', 0)}\n"
+        f"No PrimeBot 2 positions open: {no_positions}"
+    )
+
+
+def notify_break_even_retry_summary(summary):
+    send(
+        "SET BREAKEVEN - PENDING RETRY\n\n"
+        f"Retried: {summary.get('retried', 0)}\n"
+        f"Moved successfully: {summary.get('moved', 0)}\n"
+        f"Already protected: {summary.get('already_protected', 0)}\n"
+        f"Still pending: {summary.get('pending', 0)}\n"
+        f"Closed: {summary.get('closed', 0)}\n"
+        f"Failed: {summary.get('failed', 0)}"
+    )
+
+
 def notify_edit(signal):
     side = _signal_side(signal)
 

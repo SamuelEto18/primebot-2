@@ -54,7 +54,7 @@
     {
       "name": "Telegram chat ID",
       "path": "config.py",
-      "pattern": "(?m)^PRIMEBOT2_TELEGRAM_CHANNEL_ID\\s*=\\s*-1002275473775\\s*$"
+      "pattern": "(?m)^PRIMEBOT2_TELEGRAM_CHANNEL_ID\\s*=\\s*-1002792547449\\s*$"
     },
     {
       "name": "MT5 magic",

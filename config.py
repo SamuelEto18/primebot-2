@@ -8,9 +8,11 @@ DEVIATION = 20
 
 COMMENT = "PrimeBot2"
 
-# PrimeBot 2 profitable break-even sticker identity
-PRIMEBOT2_TELEGRAM_CHANNEL_ID = -1002275473775
-APPROVED_BE_STICKER_DOCUMENT_IDS = frozenset({5422500716344283971})
+# PrimeBot 2 Telegram source identity. CHANNEL_ID must match this value.
+PRIMEBOT2_TELEGRAM_CHANNEL_ID = -1002792547449
+
+# PrimeBot 2 sticker-management values. The exact Telegram document IDs are
+# supplied through the environment; empty allowlists disable both commands.
 PROFITABLE_BREAK_EVEN_OFFSET = 1.00
 PROFITABLE_BREAK_EVEN_SYMBOL = "XAUUSD.s"
 

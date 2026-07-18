@@ -3,6 +3,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+from config import PRIMEBOT2_TELEGRAM_CHANNEL_ID
 from core.settings import ConfigurationError, load_settings
 
 
@@ -11,7 +12,7 @@ REQUIRED_ENV = {
     "ADMIN_ID": "1",
     "API_ID": "1000",
     "API_HASH": "hash",
-    "CHANNEL_ID": "-100123",
+    "CHANNEL_ID": str(PRIMEBOT2_TELEGRAM_CHANNEL_ID),
     "SESSION_NAME": "primebot_test",
 }
 
@@ -52,6 +53,59 @@ class SettingsTests(unittest.TestCase):
                     load_settings(validate=True)
 
         self.assertIn("ADMIN_ID", str(ctx.exception))
+
+    def test_old_channel_id_is_rejected_as_configuration_mismatch(self):
+        env = dict(REQUIRED_ENV)
+        env["CHANNEL_ID"] = "-1002275473775"
+
+        with patch.dict(os.environ, env, clear=True):
+            with patch("core.settings.load_dotenv"):
+                with self.assertRaises(ConfigurationError) as ctx:
+                    load_settings(validate=True)
+
+        self.assertIn("fixed PrimeBot 2 Telegram source", str(ctx.exception))
+
+    def test_sticker_allowlists_are_exact_integer_sets(self):
+        env = dict(REQUIRED_ENV)
+        env.update({
+            "MT5_LOGIN": "12345678",
+            "TELEGRAM_STICKER_BREAK_EVEN_DOCUMENT_IDS": "111, 222;111",
+            "TELEGRAM_STICKER_CLOSE_ALL_DOCUMENT_IDS": "333",
+            "TELEGRAM_STICKER_DISCOVERY_NOTIFY": "true",
+        })
+
+        with patch.dict(os.environ, env, clear=True):
+            with patch("core.settings.load_dotenv"):
+                settings = load_settings(validate=True)
+
+        self.assertEqual(settings.mt5_login, 12345678)
+        self.assertEqual(settings.sticker_break_even_document_ids, {111, 222})
+        self.assertEqual(settings.sticker_close_all_document_ids, {333})
+        self.assertTrue(settings.sticker_discovery_notify)
+
+    def test_empty_sticker_allowlists_are_disabled(self):
+        env = dict(REQUIRED_ENV)
+        env["TELEGRAM_STICKER_BREAK_EVEN_DOCUMENT_IDS"] = ""
+        env["TELEGRAM_STICKER_CLOSE_ALL_DOCUMENT_IDS"] = ""
+
+        with patch.dict(os.environ, env, clear=True):
+            with patch("core.settings.load_dotenv"):
+                settings = load_settings(validate=True)
+
+        self.assertFalse(settings.sticker_break_even_document_ids)
+        self.assertFalse(settings.sticker_close_all_document_ids)
+
+    def test_overlapping_sticker_allowlists_stop_configuration(self):
+        env = dict(REQUIRED_ENV)
+        env["TELEGRAM_STICKER_BREAK_EVEN_DOCUMENT_IDS"] = "111,222"
+        env["TELEGRAM_STICKER_CLOSE_ALL_DOCUMENT_IDS"] = "222,333"
+
+        with patch.dict(os.environ, env, clear=True):
+            with patch("core.settings.load_dotenv"):
+                with self.assertRaises(ConfigurationError) as ctx:
+                    load_settings(validate=True)
+
+        self.assertIn("cannot enable both", str(ctx.exception))
 
     def test_missing_configuration_ignores_external_dotenv_source(self):
         env = dict(REQUIRED_ENV)

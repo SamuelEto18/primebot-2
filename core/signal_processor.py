@@ -14,8 +14,8 @@ from core.duplicate_detector import (
 )
 
 from core.executor import execute_signal
-from core.break_even import handle_break_even_sticker
 from core.management import process_management_message
+from core.sticker_management import handle_sticker_management
 from core.synchronizer import synchronize_trade
 from core.notifier import (
     notify_signal,
@@ -111,7 +111,7 @@ def _log_parsed_signal(signal, mode):
 
 async def process_new_message(event):
 
-    if handle_break_even_sticker(event):
+    if handle_sticker_management(event):
         return
 
     if not event.raw_text or not event.raw_text.strip():
@@ -203,6 +203,9 @@ async def process_new_message(event):
 
 
 async def process_edited_message(event):
+
+    if handle_sticker_management(event, edited=True):
+        return
 
     if not event.raw_text or not event.raw_text.strip():
         return

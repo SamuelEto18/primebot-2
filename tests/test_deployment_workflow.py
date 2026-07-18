@@ -57,6 +57,11 @@ def run(command, *, cwd=None, env=None, check=True, timeout=120):
     return result
 
 
+def normalized_terminal_text(value):
+    """Collapse PowerShell's width-dependent console wrapping only."""
+    return re.sub(r"\s+", " ", value).strip()
+
+
 def write(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -139,7 +144,7 @@ class DeploymentEnvironment:
         self._git("config", "user.email", "deployment-tests@example.invalid")
         self._git("config", "core.autocrlf", "false")
 
-        chat_id = "-1002275473775" if identity_ok else "-1009999999999"
+        chat_id = "-1002792547449" if identity_ok else "-1009999999999"
         write(
             self.repository / "config.py",
             "\n".join(
@@ -497,7 +502,10 @@ class DeploymentFailureIntegrationTests(unittest.TestCase):
         environment = self._environment(identity_ok=False)
         result = environment.deploy()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Production identity mismatch", result.stdout)
+        self.assertIn(
+            "Production identity mismatch",
+            normalized_terminal_text(result.stdout),
+        )
         self.assertFalse((environment.production / "core" / "new_file.py").exists())
 
     def test_failed_tests_preserve_repository_and_remove_worktree(self):
@@ -590,7 +598,8 @@ class DeploymentFailureIntegrationTests(unittest.TestCase):
         result = environment.deploy()
         self.assertNotEqual(result.returncode, 0)
         self.assertRegex(
-            result.stdout, r"Production identity mismatch:\s+MT5 server"
+            normalized_terminal_text(result.stdout),
+            r"Production identity mismatch:\s+MT5 server",
         )
         self.assertNotIn("Wrong-Live-Server", result.stdout)
         self.assertNotIn("12345678", result.stdout)

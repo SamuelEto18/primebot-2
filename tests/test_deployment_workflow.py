@@ -144,7 +144,7 @@ class DeploymentEnvironment:
         self._git("config", "user.email", "deployment-tests@example.invalid")
         self._git("config", "core.autocrlf", "false")
 
-        chat_id = "-1002275473775" if identity_ok else "-1009999999999"
+        chat_id = "-1002792547449" if identity_ok else "-1009999999999"
         write(
             self.repository / "config.py",
             "\n".join(

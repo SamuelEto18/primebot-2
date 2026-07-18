@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from threading import RLock
 from types import SimpleNamespace
 import time
@@ -1770,6 +1771,127 @@ def recover_pending_position_identity(
         )
 
 
+def _normalized_symbol_price(price, info):
+    digits = getattr(info, "digits", None)
+
+    try:
+        digits = int(digits)
+    except (TypeError, ValueError):
+        digits = 2
+
+    point = _to_float(getattr(info, "point", None))
+    tick_size = _to_float(getattr(info, "trade_tick_size", None))
+
+    if point is None or point <= 0:
+        point = 10 ** -digits
+
+    if tick_size is None or tick_size <= 0:
+        tick_size = point
+
+    try:
+        value = Decimal(str(price))
+        step = Decimal(str(tick_size))
+        ticks = (value / step).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        quantum = Decimal("1").scaleb(-digits)
+        return float((ticks * step).quantize(quantum, rounding=ROUND_HALF_UP))
+    except (ArithmeticError, InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("Unable to normalize protected break-even price") from exc
+
+
+def _protected_break_even_request(position, offset, info):
+    entry = _to_float(getattr(position, "price_open", None))
+    current_sl = _to_float(getattr(position, "sl", None))
+    current_tp = getattr(position, "tp", None)
+
+    if entry is None:
+        return None, "MT5 open price unavailable"
+
+    if getattr(position, "type", None) == mt5.POSITION_TYPE_BUY:
+        side = "BUY"
+        requested_sl = _normalized_symbol_price(entry + float(offset), info)
+    elif getattr(position, "type", None) == mt5.POSITION_TYPE_SELL:
+        side = "SELL"
+        requested_sl = _normalized_symbol_price(entry - float(offset), info)
+    else:
+        return None, "Unsupported MT5 position side"
+
+    point = _to_float(getattr(info, "point", None))
+    digits = getattr(info, "digits", 2)
+
+    try:
+        digits = int(digits)
+    except (TypeError, ValueError):
+        digits = 2
+
+    if point is None or point <= 0:
+        point = 10 ** -digits
+
+    tick_size = _to_float(getattr(info, "trade_tick_size", None))
+
+    if tick_size is None or tick_size <= 0:
+        tick_size = point
+
+    tolerance = max(tick_size / 2, 0.0000001)
+    already_protected = (
+        current_sl is not None
+        and current_sl > 0
+        and (
+            (side == "BUY" and current_sl >= requested_sl - tolerance)
+            or (side == "SELL" and current_sl <= requested_sl + tolerance)
+        )
+    )
+    prepared = {
+        "requested_sl": requested_sl,
+        "current_sl": current_sl,
+        "requested_tp": current_tp,
+        "position_open_price": entry,
+        "side": side,
+        "already_protected": already_protected,
+    }
+
+    if already_protected:
+        return prepared, None
+
+    tick = mt5.symbol_info_tick(position.symbol)
+
+    if tick is None:
+        return prepared, "Current market price unavailable"
+
+    stops_level = max(_to_float(getattr(info, "trade_stops_level", 0)) or 0, 0)
+    freeze_level = max(_to_float(getattr(info, "trade_freeze_level", 0)) or 0, 0)
+    minimum_distance = max(stops_level, freeze_level) * point
+    tp = _to_float(current_tp)
+
+    if side == "BUY":
+        bid = _to_float(getattr(tick, "bid", None))
+
+        if bid is None:
+            return prepared, "Current bid unavailable"
+
+        if requested_sl > bid - minimum_distance + tolerance:
+            return prepared, (
+                f"BUY stop {requested_sl} is inside broker stop/freeze distance"
+            )
+
+        if tp is not None and tp > 0 and requested_sl >= tp - tolerance:
+            return prepared, f"BUY stop {requested_sl} is not below TP {tp}"
+    else:
+        ask = _to_float(getattr(tick, "ask", None))
+
+        if ask is None:
+            return prepared, "Current ask unavailable"
+
+        if requested_sl < ask + minimum_distance - tolerance:
+            return prepared, (
+                f"SELL stop {requested_sl} is inside broker stop/freeze distance"
+            )
+
+        if tp is not None and tp > 0 and requested_sl <= tp + tolerance:
+            return prepared, f"SELL stop {requested_sl} is not above TP {tp}"
+
+    return prepared, None
+
+
 def modify_trade(
     ticket,
     sl=None,
@@ -1777,10 +1899,33 @@ def modify_trade(
     expected_symbol=None,
     expected_magic=None,
     expected_comment=None,
+    expected_account_login=None,
+    expected_identifier=None,
+    protected_break_even_offset=None,
 ):
 
     with MT5_LOCK:
         _require_mt5()
+
+        if expected_account_login is not None:
+            account = mt5.account_info()
+
+            if (
+                account is None
+                or _identity_value(getattr(account, "login", None))
+                != _identity_value(expected_account_login)
+            ):
+                logger.warning(
+                    "MT5 modify blocked by account ownership check | "
+                    f"Ticket={ticket}"
+                )
+                return {
+                    "success": False,
+                    "ticket": ticket,
+                    "comment": "Ownership mismatch: MT5 account",
+                    "ownership_mismatch": True,
+                }
+
         positions = mt5.positions_get(ticket=ticket)
 
         if not positions:
@@ -1791,6 +1936,22 @@ def modify_trade(
             }
 
         position = positions[0]
+
+        if (
+            expected_identifier is not None
+            and _identity_value(_position_identifier(position))
+            != _identity_value(expected_identifier)
+        ):
+            logger.warning(
+                "MT5 modify blocked by position identity check | "
+                f"Ticket={ticket}"
+            )
+            return {
+                "success": False,
+                "ticket": ticket,
+                "comment": "Ownership mismatch: position identifier",
+                "ownership_mismatch": True,
+            }
 
         ownership_checks = (
             ("symbol", expected_symbol),
@@ -1812,7 +1973,58 @@ def modify_trade(
                 }
 
         symbol = position.symbol
-        requested_sl = sl if sl is not None else position.sl
+        protected = None
+
+        if protected_break_even_offset is not None:
+            info = mt5.symbol_info(symbol)
+
+            if info is None:
+                return {
+                    "success": False,
+                    "ticket": ticket,
+                    "comment": "Symbol information unavailable",
+                    "invalid_stops": True,
+                }
+
+            try:
+                protected, reason = _protected_break_even_request(
+                    position,
+                    protected_break_even_offset,
+                    info,
+                )
+            except (ArithmeticError, TypeError, ValueError) as exc:
+                protected, reason = None, str(exc)
+
+            if protected is None:
+                return {
+                    "success": False,
+                    "ticket": ticket,
+                    "comment": reason or "Protected break-even is invalid",
+                    "invalid_stops": True,
+                }
+
+            if reason:
+                return {
+                    "success": False,
+                    "ticket": ticket,
+                    "comment": reason,
+                    "invalid_stops": True,
+                    **protected,
+                }
+
+            if protected["already_protected"]:
+                return {
+                    "success": True,
+                    "ticket": ticket,
+                    "comment": "Already protected",
+                    "noop": True,
+                    **protected,
+                }
+
+            requested_sl = protected["requested_sl"]
+        else:
+            requested_sl = sl if sl is not None else position.sl
+
         requested_tp = tp if tp is not None else position.tp
         tolerance = _price_tolerance(symbol)
 
@@ -1829,6 +2041,7 @@ def modify_trade(
                 "ticket": ticket,
                 "comment": "No changes",
                 "noop": True,
+                **(protected or {}),
             }
 
         request = {
@@ -1872,6 +2085,7 @@ def modify_trade(
                         "retcode": result.retcode,
                         "comment": result.comment,
                         "noop": True,
+                        **(protected or {}),
                     }
 
         return {
@@ -1880,23 +2094,87 @@ def modify_trade(
             "retcode": result.retcode,
             "comment": result.comment,
             "noop": False,
+            **(protected or {}),
         }
 
 
-def close_trade(ticket):
+def close_trade(
+    ticket,
+    expected_symbol=None,
+    expected_magic=None,
+    expected_comment=None,
+    expected_account_login=None,
+    expected_identifier=None,
+):
 
     with MT5_LOCK:
         _require_mt5()
+
+        if expected_account_login is not None:
+            account = mt5.account_info()
+
+            if (
+                account is None
+                or _identity_value(getattr(account, "login", None))
+                != _identity_value(expected_account_login)
+            ):
+                logger.warning(
+                    "MT5 close blocked by account ownership check | "
+                    f"Ticket={ticket}"
+                )
+                return {
+                    "success": False,
+                    "ticket": ticket,
+                    "comment": "Ownership mismatch: MT5 account",
+                    "ownership_mismatch": True,
+                }
+
         positions = mt5.positions_get(ticket=ticket)
 
         if not positions:
             return {
                 "success": False,
                 "ticket": ticket,
-                "comment": "Position not found"
+                "comment": "Position not found",
+                "already_absent": True,
             }
 
         position = positions[0]
+        ownership_checks = (
+            ("symbol", expected_symbol),
+            ("magic", expected_magic),
+            ("comment", expected_comment),
+        )
+
+        for field, expected in ownership_checks:
+            if expected is not None and getattr(position, field, None) != expected:
+                logger.warning(
+                    "MT5 close blocked by ownership check | "
+                    f"Ticket={ticket} Field={field}"
+                )
+                return {
+                    "success": False,
+                    "ticket": ticket,
+                    "comment": f"Ownership mismatch: {field}",
+                    "ownership_mismatch": True,
+                }
+
+        if (
+            expected_identifier is not None
+            and _identity_value(_position_identifier(position))
+            != _identity_value(expected_identifier)
+        ):
+            logger.warning(
+                "MT5 close blocked by position identity check | "
+                f"Ticket={ticket}"
+            )
+            return {
+                "success": False,
+                "ticket": ticket,
+                "comment": "Ownership mismatch: position identifier",
+                "ownership_mismatch": True,
+            }
+
         info = mt5.symbol_info(position.symbol)
         tick = mt5.symbol_info_tick(position.symbol)
 

@@ -26,9 +26,13 @@ Using Telethon.
 
 Only ONE VIP channel is currently supported.
 
-Only TEXT messages are processed.
+Text signals remain the only trade-opening media path. Images, GIFs, videos,
+video messages, photos, reactions, custom emoji, and unknown documents cannot
+open or manage trades.
 
-Images, GIFs, stickers, videos and documents are ignored.
+Two sticker-management commands can be enabled with exact Telegram document-ID
+allowlists. Unknown stickers are logged and ignored. Empty allowlists disable
+all sticker management.
 
 ---
 
@@ -65,6 +69,16 @@ After TP1 closes
 Remaining positions automatically move their Stop Loss to Entry.
 
 Only once.
+
+An allowlisted break-even sticker can also move every remaining, conclusively
+owned PrimeBot 2 XAUUSD position to its own MT5 open price plus 1.00 for BUY or
+minus 1.00 for SELL. Better existing protection is never moved backwards.
+
+An independently allowlisted close-all sticker closes every remaining,
+conclusively owned PrimeBot 2 position on the bot's configured allowed symbols.
+It does not cancel pending orders. Matching durable trade records are
+cross-checked, but a missing record does not exclude a position whose live
+account, magic, comment, symbol, ticket, and identifier prove ownership.
 
 ---
 

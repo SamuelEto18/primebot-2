@@ -632,11 +632,19 @@ def process_trades_once(trades):
             update_trade(trade)
 
 
+def _resume_sticker_management_operations(force=False):
+    # Lazy import keeps the position manager independent from Telethon startup.
+    from core.sticker_management import resume_pending_sticker_operations
+
+    return resume_pending_sticker_operations(force=force)
+
+
 def run_startup_recovery():
 
     try:
         recover_pending_identities_once()
         retry_pending_break_even_actions()
+        _resume_sticker_management_operations(force=True)
         process_trades_once(load_trades())
     except Exception as exc:
         logger.warning(f"Startup recovery skipped: {exc}")
@@ -658,6 +666,7 @@ def monitor_positions():
 
                 recover_pending_identities_once()
                 retry_pending_break_even_actions()
+                _resume_sticker_management_operations()
                 trades = load_trades()
 
                 process_trades_once(trades)

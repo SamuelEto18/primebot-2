@@ -3,13 +3,9 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from threading import RLock
 import time
 
-from telethon.tl.types import DocumentAttributeSticker
-
 from config import (
-    APPROVED_BE_STICKER_DOCUMENT_IDS,
     COMMENT,
     MAGIC_NUMBER,
-    PRIMEBOT2_TELEGRAM_CHANNEL_ID,
     PROFITABLE_BREAK_EVEN_OFFSET,
     PROFITABLE_BREAK_EVEN_SYMBOL,
 )
@@ -24,7 +20,6 @@ from core.mt5_service import (
     modify_trade,
     position_type_buy,
     position_type_sell,
-    positions_get,
     query_position,
     symbol_info,
     symbol_info_tick,
@@ -32,8 +27,6 @@ from core.mt5_service import (
 )
 from core.notifier import (
     notify_break_even_retry_summary,
-    notify_break_even_summary,
-    notify_error,
 )
 from core.runtime import is_auto_execute, is_paused
 
@@ -247,6 +240,8 @@ def _broker_rejected_stop(result):
         invalid_stops = None
 
     return (
+        bool(result.get("invalid_stops"))
+        or
         (
             invalid_stops is not None
             and result.get("retcode") == invalid_stops
@@ -258,7 +253,12 @@ def _broker_rejected_stop(result):
     )
 
 
-def apply_profitable_break_even(position, dry_run=False):
+def apply_profitable_break_even(
+    position,
+    dry_run=False,
+    expected_account_login=None,
+    expected_identifier=None,
+):
     ticket = getattr(position, "ticket", None)
 
     if not is_owned_primebot2_position(position):
@@ -306,21 +306,21 @@ def apply_profitable_break_even(position, dry_run=False):
     _digits, tick_size, _point = _symbol_precision(info)
     current_sl = _to_float(getattr(position, "sl", None))
 
-    if _protection_is_requested_or_better(
-        side,
-        current_sl,
-        target_sl,
-        tolerance=max(tick_size / 2, 0.0000001),
-    ):
-        return {
-            "status": STATUS_ALREADY_PROTECTED,
-            "ticket": ticket,
-            "side": side,
-            "target_sl": target_sl,
-            "current_sl": current_sl,
-        }
-
     if dry_run:
+        if _protection_is_requested_or_better(
+            side,
+            current_sl,
+            target_sl,
+            tolerance=max(tick_size / 2, 0.0000001),
+        ):
+            return {
+                "status": STATUS_ALREADY_PROTECTED,
+                "ticket": ticket,
+                "side": side,
+                "target_sl": target_sl,
+                "current_sl": current_sl,
+            }
+
         try:
             valid, reason = _broker_stop_is_valid(position, side, target_sl, info)
         except Exception as exc:
@@ -338,29 +338,29 @@ def apply_profitable_break_even(position, dry_run=False):
         }
 
     try:
-        valid, reason = _broker_stop_is_valid(position, side, target_sl, info)
-    except Exception as exc:
-        valid = False
-        reason = f"Broker stop validation unavailable: {exc}"
-
-    if not valid:
-        return {
-            "status": STATUS_PENDING,
-            "ticket": ticket,
-            "side": side,
-            "target_sl": target_sl,
-            "current_sl": current_sl,
-            "reason": reason,
+        ownership = {
+            "expected_symbol": PROFITABLE_BREAK_EVEN_SYMBOL,
+            "expected_magic": MAGIC_NUMBER,
+            "expected_comment": COMMENT,
+            "protected_break_even_offset": PROFITABLE_BREAK_EVEN_OFFSET,
         }
 
-    try:
-        result = modify_trade(
-            ticket,
-            sl=target_sl,
-            expected_symbol=PROFITABLE_BREAK_EVEN_SYMBOL,
-            expected_magic=MAGIC_NUMBER,
-            expected_comment=COMMENT,
-        )
+        if expected_account_login is not None:
+            ownership["expected_account_login"] = expected_account_login
+
+        if expected_identifier is None:
+            expected_identifier = _to_int(
+                getattr(
+                    position,
+                    "identifier",
+                    getattr(position, "position_identifier", None),
+                )
+            )
+
+        if expected_identifier is not None:
+            ownership["expected_identifier"] = expected_identifier
+
+        result = modify_trade(ticket, **ownership)
     except Exception as exc:
         return {
             "status": STATUS_FAILED,
@@ -371,6 +371,10 @@ def apply_profitable_break_even(position, dry_run=False):
             "reason": f"MT5 modification failed: {exc}",
         }
 
+    authoritative_target = result.get("requested_sl", target_sl)
+    authoritative_current = result.get("current_sl", current_sl)
+    authoritative_side = result.get("side", side)
+
     if result.get("success"):
         return {
             "status": (
@@ -379,9 +383,9 @@ def apply_profitable_break_even(position, dry_run=False):
                 else STATUS_MOVED
             ),
             "ticket": ticket,
-            "side": side,
-            "target_sl": target_sl,
-            "current_sl": current_sl,
+            "side": authoritative_side,
+            "target_sl": authoritative_target,
+            "current_sl": authoritative_current,
             "mt5_result": result,
         }
 
@@ -389,57 +393,12 @@ def apply_profitable_break_even(position, dry_run=False):
     return {
         "status": status,
         "ticket": ticket,
-        "side": side,
-        "target_sl": target_sl,
-        "current_sl": current_sl,
+        "side": authoritative_side,
+        "target_sl": authoritative_target,
+        "current_sl": authoritative_current,
         "reason": result.get("comment") or "MT5 modification failed",
         "mt5_result": result,
     }
-
-
-def _event_document(event):
-    direct = getattr(event, "document", None)
-
-    if direct is not None:
-        return direct
-
-    message = getattr(event, "message", None)
-    document = getattr(message, "document", None) if message is not None else None
-
-    if document is not None:
-        return document
-
-    media = getattr(event, "media", None)
-    return getattr(media, "document", None)
-
-
-def _is_sticker_document(document):
-    attributes = getattr(document, "attributes", None) or ()
-    return any(isinstance(attribute, DocumentAttributeSticker) for attribute in attributes)
-
-
-def approved_break_even_sticker(event):
-    try:
-        if int(getattr(event, "chat_id", 0)) != PRIMEBOT2_TELEGRAM_CHANNEL_ID:
-            return None
-    except (TypeError, ValueError):
-        return None
-
-    document = _event_document(event)
-
-    if document is None or not _is_sticker_document(document):
-        return None
-
-    document_id = _to_int(getattr(document, "id", None))
-
-    if document_id not in APPROVED_BE_STICKER_DOCUMENT_IDS:
-        return None
-
-    return document
-
-
-def _action_key(chat_id, message_id):
-    return f"{int(chat_id)}:{int(message_id)}"
 
 
 def _pending_delay(attempts):
@@ -526,157 +485,12 @@ def _resolve_existing_pending(state, position, result):
         _set_action_position_status(state, pending, result)
 
 
-def _action_summary(action):
-    results = list(action.get("position_results", {}).values())
-    status_counts = {}
-
-    for result in results:
-        status = result.get("status")
-        status_counts[status] = status_counts.get(status, 0) + 1
-
-    ignored = status_counts.get(STATUS_IGNORED, 0)
-    owned = max(action.get("positions_discovered", 0) - ignored, 0)
-    return {
-        "mode": action.get("mode"),
-        "chat_id": action.get("chat_id"),
-        "message_id": action.get("message_id"),
-        "document_id": action.get("document_id"),
-        "positions_discovered": action.get("positions_discovered", 0),
-        "primebot2_positions": owned,
-        "moved": status_counts.get(STATUS_MOVED, 0),
-        "already_protected": status_counts.get(STATUS_ALREADY_PROTECTED, 0),
-        "pending": status_counts.get(STATUS_PENDING, 0),
-        "failed": status_counts.get(STATUS_FAILED, 0),
-        "ignored": ignored,
-        "simulated": status_counts.get(STATUS_SIMULATED, 0),
-        "closed": status_counts.get(STATUS_CLOSED, 0),
-        "no_primebot2_positions": (
-            owned == 0
-            and action.get("mode") != "paused"
-            and not action.get("query_failed", False)
-        ),
-        "paused": action.get("mode") == "paused",
-    }
-
-
-def _record_paused_action(state, key, event, document, message_id):
-    action = {
-        "chat_id": int(event.chat_id),
-        "message_id": int(message_id),
-        "document_id": int(document.id),
-        "mode": "paused",
-        "positions_discovered": 0,
-        "position_results": {},
-        "created_at": _now(),
-        "completed_at": _now(),
-    }
-    state["actions"][key] = action
-    return action
-
-
 def handle_break_even_sticker(event):
-    document = approved_break_even_sticker(event)
+    # Compatibility entry point for older callers. The generic handler owns
+    # source validation, discovery logging, allowlists, and durable idempotency.
+    from core.sticker_management import handle_sticker_management
 
-    if document is None:
-        return False
-
-    message_id = getattr(event, "id", getattr(event, "message_id", None))
-
-    if message_id is None:
-        logger.warning("Approved break-even sticker has no Telegram message ID")
-        return True
-
-    key = _action_key(event.chat_id, message_id)
-
-    with _ACTION_LOCK:
-        state = load_break_even_state()
-
-        if state is None:
-            notify_error("Break-even sticker ignored: durable action state is unreadable")
-            return True
-
-        if key in state["actions"]:
-            logger.info(
-                "Duplicate break-even sticker delivery ignored | "
-                f"ChatID={event.chat_id} Message={message_id}"
-            )
-            return True
-
-        if is_paused():
-            action = _record_paused_action(
-                state,
-                key,
-                event,
-                document,
-                message_id,
-            )
-
-            if not save_break_even_state(state):
-                notify_error("Break-even sticker result could not be stored durably")
-                return True
-
-            notify_break_even_summary(_action_summary(action))
-            return True
-
-        live_mode = is_auto_execute()
-        action = {
-            "chat_id": int(event.chat_id),
-            "message_id": int(message_id),
-            "document_id": int(document.id),
-            "mode": "live" if live_mode else "dry_run",
-            "positions_discovered": 0,
-            "position_results": {},
-            "created_at": _now(),
-        }
-
-        try:
-            open_positions = positions_get()
-
-            if open_positions is None:
-                raise RuntimeError("MT5 open-position query failed")
-
-            open_positions = list(open_positions)
-            action["positions_discovered"] = len(open_positions)
-
-            for position in open_positions:
-                result = apply_profitable_break_even(
-                    position,
-                    dry_run=not live_mode,
-                )
-                position_key = _position_identity_key(position)
-                action["position_results"][position_key] = dict(result)
-
-                if live_mode and result.get("status") == STATUS_PENDING:
-                    _merge_pending(
-                        state,
-                        position,
-                        result,
-                        source_action_key=key,
-                        source="sticker",
-                    )
-                elif live_mode and result.get("status") in (
-                    STATUS_MOVED,
-                    STATUS_ALREADY_PROTECTED,
-                ):
-                    _resolve_existing_pending(state, position, result)
-        except Exception as exc:
-            logger.exception("Break-even sticker position processing failed")
-            action["query_failed"] = True
-            action["position_results"]["query"] = {
-                "status": STATUS_FAILED,
-                "ticket": None,
-                "reason": str(exc),
-            }
-
-        action["completed_at"] = _now()
-        state["actions"][key] = action
-
-        if not save_break_even_state(state):
-            notify_error("Break-even sticker result could not be stored durably")
-            return True
-
-        notify_break_even_summary(_action_summary(action))
-        return True
+    return handle_sticker_management(event)
 
 
 def record_automatic_pending(position, result, source_key):

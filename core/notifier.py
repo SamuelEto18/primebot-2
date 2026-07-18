@@ -165,6 +165,59 @@ def notify_break_even_retry_summary(summary):
     )
 
 
+def notify_sticker_management_event(event_name, details=None):
+    details = details or {}
+    lines = [
+        "PRIMEBOT 2 STICKER MANAGEMENT",
+        f"Event: {str(event_name).replace('_', ' ').upper()}",
+    ]
+
+    preferred_fields = (
+        "command",
+        "mode",
+        "operation_status",
+        "original_status",
+        "live_action_occurred",
+        "operation",
+        "ticket",
+        "stage",
+        "message_id",
+        "source_chat_id",
+        "sender_id",
+        "document_id",
+        "access_hash",
+        "sticker_set_id",
+        "sticker_set_short_name",
+        "sticker_emoji",
+        "mime_type",
+        "is_animated",
+        "is_video",
+        "is_static",
+        "message_date",
+        "edit_date",
+        "allowlist_match",
+        "positions_discovered",
+        "eligible",
+        "updated",
+        "already_protected",
+        "closed",
+        "already_absent",
+        "skipped",
+        "failed",
+        "count",
+        "reason",
+    )
+
+    for field in preferred_fields:
+        value = details.get(field)
+
+        if value is not None:
+            label = field.replace("_", " ").title()
+            lines.append(f"{label}: {value}")
+
+    send("\n".join(lines)[:3900])
+
+
 def notify_edit(signal):
     side = _signal_side(signal)
 
